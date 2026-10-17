@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2D 地球 · 实时流体风场 (打碎伪影版)</title>
+  
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+
+  <style>
+    html, body { margin: 0; height: 100%; background: #0a0e14; font-family: sans-serif; }
+    #map { width: 100%; height: 100%; }
+    
+    .glass-panel {
+      position: absolute; z-index: 10;
+      background: rgba(10, 14, 20, 0.7); 
+      border: 1px solid #1e2833; border-radius: 6px;
+      color: #9aa7b8; font: 12px/1.6 ui-monospace, monospace;
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    }
+
+    #jump-panel {
+      top: 16px; left: 16px; padding: 8px 12px;
+      display: flex; gap: 8px; align-items: center;
+    }
+    #jump-panel input {
+      background: rgba(0, 0, 0, 0.3); border: 1px solid #1e2833;
+      color: #00ffcc; padding: 4px 8px; border-radius: 4px;
+      font: 12px/1.6 ui-monospace, monospace; width: 65px; outline: none;
+    }
+    #jump-panel input:focus { border-color: #00ffcc; }
+    #jump-panel button {
+      background: rgba(0, 255, 204, 0.1); color: #00ffcc;
+      border: 1px solid #00ffcc; border-radius: 4px;
+      padding: 4px 12px; cursor: pointer; font-weight: bold;
+      transition: all 0.2s ease;
+    }
+    #jump-panel button:hover { background: rgba(0, 255, 204, 0.2); }
+
+    #info { bottom: 16px; left: 16px; padding: 8px 12px; }
+    #refresh-btn {
+      position: absolute; top: 16px; right: 16px; z-index: 10;
+      background: rgba(10, 14, 20, 0.7); color: #9aa7b8;
+      border: 1px solid #1e2833; border-radius: 6px;
+      padding: 8px 16px; cursor: pointer; font: 12px/1.6 ui-monospace, monospace;
+      transition: all 0.2s ease; backdrop-filter: blur(6px);
+    }
+    #refresh-btn:hover { color: #e2e8f0; border-color: #4a5c6e; }
+
+    .custom-popup .maplibregl-popup-content {
+      background: rgba(10, 14, 20, 0.85) !important;
+      border: 1px solid #1e2833 !important;
+      border-radius: 6px !important; color: #00ffcc !important; 
+      font: 12px/1.6 ui-monospace, monospace;
+      padding: 10px 14px !important; box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+      backdrop-filter: blur(6px);
+    }
+    .custom-popup .maplibregl-popup-close-button { color: #9aa7b8; right: 4px; top: 4px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  
+  <div id="jump-panel" class="glass-panel">
+    <span>Lng:</span>
+    <input type="number" id="lng-input" placeholder="120.0" step="0.1" />
+    <span>Lat:</span>
+    <input type="number" id="lat-input" placeholder="30.0" step="0.1" />
+    <button id="jump-btn">跳转</button>
+  </div>
+
+  <div id="info" class="glass-panel">全球风场 · 打碎伪影</div>
+  <button id="refresh-btn">🔄 刷新数据</button>
+
+  <script type="module">
+    import { Zartigl } from 'https://esm.sh/@fxi/zartigl@0.5.0';
+    import { catalog, searchCatalog } from 'https://esm.sh/@fxi/zartigl@0.5.0/catalog';
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: 'https://tiles.openfreemap.org/styles/dark',
+      center: [0, 20],
+      zoom: 1.5,
+      maxZoom: 3,
+      minZoom: 1,
+      attributionControl: false,
+      projection: { type: 'mercator' }
+    });
+
+    let z = null;
+
+    map.on('load', async () => {
+      try {
+        let windEntries = searchCatalog('wind');
+        if (!windEntries || windEntries.length === 0) {
+            const allEntries = searchCatalog('');
+            if (allEntries && allEntries.length > 0) windEntries = [allEntries[0]];
+        }
+
+        z = new Zartigl({
+          id: 'global-wind',
+          map: map,
+          catalog: catalog,
+          layer: windEntries[0].id,
+          source: 'auto',
+          time: new Date(),
+          settings: { 
+            palette: [
+              '#060a0f', // 1. 极暗，风眼处的死区
+              '#0b2b45', // 2. 深蓝
+              '#0066cc', // 3. 亮蓝
+              '#00d2ff', // 4. 青色
+              '#33cc33', // 5. 绿色
+              '#ffcc00', // 6. 黄色
+              '#ff6600', // 7. 橙色
+              '#ff0000'  // 8. 红色
+            ],
+            
+            // 🎯 核心反制：极短拖尾 + 极高重生率 = 动态噪点掩盖直线
+            fadeOpacity: 0.85,     
+            dropRate: 0.015,       
+            particleCount: 90000,  
+            speedFactor: 0.5       
+          }
+        });
+
+        z.on('status', (s) => console.log('风场状态:', s.phase));
+        z.on('error', (err) => console.error('风场渲染错误:', err));
+
+        await z.init();
+        console.log('✅ 渲染成功！');
+      } catch (error) {
+        console.error('❌ 渲染失败:', error);
+      }
+    });
+
+    // 交互逻辑
+    const jumpBtn = document.getElementById('jump-btn');
+    const lngInput = document.getElementById('lng-input');
+    const latInput = document.getElementById('lat-input');
+
+    function handleJump() {
+      const lng = parseFloat(lngInput.value);
+      const lat = parseFloat(latInput.value);
+      if (isNaN(lng) || isNaN(lat)) { alert("请输入有效的经纬度数字！"); return; }
+      if (lng < -180 || lng > 180 || lat < -90 || lat > 90) { alert("经纬度超出范围！"); return; }
+
+      map.flyTo({ center: [lng, lat], zoom: 3, speed: 1.5, curve: 1.5, essential: true });
+      
+      new maplibregl.Popup({ closeOnClick: true, offset: 12, className: 'custom-popup' })
+        .setLngLat([lng, lat])
+        .setHTML(`<div>🎯 目标坐标<br>经度: ${lng} <br> 纬度: ${lat}</div>`)
+        .addTo(map);
+    }
+    jumpBtn.addEventListener('click', handleJump);
+    lngInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleJump(); });
+    latInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleJump(); });
+
+    map.on('click', (e) => {
+      const lng = e.lngLat.lng.toFixed(3);
+      const lat = e.lngLat.lat.toFixed(3);
+      new maplibregl.Popup({ closeOnClick: true, offset: 12, className: 'custom-popup' })
+        .setLngLat(e.lngLat)
+        .setHTML(`<div>经度: ${lng} <br> 纬度: ${lat}</div>`)
+        .addTo(map);
+    });
+
+    document.getElementById('refresh-btn').addEventListener('click', async () => {
+      if (!z) { alert('风场图层尚未初始化完成'); return; }
+      const btn = document.getElementById('refresh-btn');
+      const originalText = btn.innerText;
+      btn.innerText = '⌛ 拉取中...';
+      try {
+        await z.update({ time: new Date() });
+        btn.innerText = '✅ 已刷新';
+        setTimeout(() => { btn.innerText = originalText; }, 1500);
+      } catch (err) {
+        console.error('刷新失败:', err);
+        btn.innerText = '❌ 刷新失败';
+        setTimeout(() => { btn.innerText = originalText; }, 2000);
+      }
+    });
+  </script>
+</body>
+</html>
